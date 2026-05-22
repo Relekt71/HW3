@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  elasticsearch-hot:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: es-hot
+    environment:
+      - node.name=es-hot
+      - cluster.name=logging-cluster
+      - discovery.seed_hosts=es-warm
+      - cluster.initial_master_nodes=es-hot
+      - node.roles=master,data_hot,data_content
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es-hot-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - elk
+
+  elasticsearch-warm:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: es-warm
+    environment:
+      - node.name=es-warm
+      - cluster.name=logging-cluster
+      - discovery.seed_hosts=es-hot
+      - cluster.initial_master_nodes=es-hot
+      - node.roles=data_warm
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es-warm-data:/usr/share/elasticsearch/data
+    depends_on:
+      - elasticsearch-hot
+    networks:
+      - elk
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: logstash
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports:
+      - "5000:5000/tcp"
+    depends_on:
+      - elasticsearch-hot
+    networks:
+      - elk
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://es-hot:9200
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch-hot
+    networks:
+      - elk
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - logstash
+    networks:
+      - elk
+
+  dummy-logger:
+    image: alpine:latest
+    container_name: dummy-logger
+    command: sh -c "while true; do echo '{\"message\":\"random event\", \"value\":'$RANDOM', \"timestamp\":'$(date +%s)'}'; sleep 2; done"
+    networks:
+      - elk
+
+volumes:
+  es-hot-data:
+  es-warm-data:
+
+networks:
+  elk:
+    driver: bridge
